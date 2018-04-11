@@ -1,0 +1,160 @@
+# -*- coding: UTF-8 -*-
+#==================================================================================================================
+# Модуль копирования файлов из одной папки в другую по FTP
+#
+# ver 0.2
+#==================================================================================================================
+#LOG HISTORY
+# ver 0.2
+# - Добавлена опция удаления файла из исходной папки если файл успешно передан или уже есть на сервере
+# - Добавлена защита, если нет связи с FTP-сервером
+# - Добавлена защита, если файл не скачался полностью.
+# - Добавлена отправка отчета о результате копирования файлов по EMail.
+# - Добавлена опция поддержки FTP over TLS 
+#
+# ver 0.1
+# - Добавлена возможность отправлять на сервер новые или не докачанные файлы
+#==================================================================================================================
+import ftplib #Работа с ФТП
+from ftplib import FTP_TLS #поддержка TLS
+from os import listdir #Получение списка файлов
+from os.path import isfile
+from os.path import join as joinpath
+import sys
+import os
+import importlib.util
+
+API_Email_spec = importlib.util.spec_from_file_location("module.name", "API_EMail.py")
+CurAPI_Email = importlib.util.module_from_spec(API_Email_spec)
+API_Email_spec.loader.exec_module(CurAPI_Email)
+
+def ftp_upload(Curftp, Source,Destination):
+    """
+    Функция для загрузки файлов на FTP-сервер
+    @param ftp_obj: Объект протокола передачи файлов
+    @param path: Путь к файлу для загрузки
+    """
+
+    with open(Source, 'rb') as fobj:
+        Curftp.storbinary('STOR ' + Destination, fobj, 1024)
+
+#Параметры		
+DeleteOnSuccessfull = True #Удалять ли копию после переноса? False = Не удалять
+FTP_OVER_TLS = True #Использовать TLS для шифрования  или нет. Рекомендуется использовать True
+HOST = '192.168.10.1' #FTP сервер
+PORT = 2121 #Порт. По умолчанию 21, но вы можете указать нестандартный
+Login = '***' #Логин от FTP
+Password= '***' #Пароль от FTP
+Path_Source='Archive' #Откуда брать архивы
+Path_Dest='/e/Backup/Archive' #Папка куда скидывать архивы
+
+#Создаем экземпляр FTP и настройки к нему
+if (FTP_OVER_TLS==False):
+	Curftp =  ftplib.FTP()  #Обычный экземпляр
+else:
+	Curftp =  ftplib.FTP_TLS() #Защищенный экземпляр
+	
+CurAction="Подключаемся к " + HOST + ":" + str(PORT)
+print (CurAction + "...")
+
+try:
+
+	Curftp.connect(HOST, PORT) #Создаем подключение к серверу
+	
+	Curftp.__class__.encoding = "utf-8" #кодировка
+	Curftp.login(user=Login, passwd=Password) #Логин и пароль от сервера
+	if (FTP_OVER_TLS==True): Curftp.prot_p() 	
+	
+	PathFile = Path_Source #Откуда брать архивы
+	Curftp.cwd(Path_Dest) #Папка куда скидывать архивы
+	
+	ListFile=[] #Успешно переданные файлы
+	ErrorFile=[] #Неудачно загруженные файлы
+	SkipFile=[] #Ранее загруженные файлы
+	
+	#Получаем список файлов на отправку и отправляем их
+	for i in listdir(PathFile):
+		try:
+			
+			CurAction="Обрабатываем: " + i
+			print (CurAction + "...")
+			Source = PathFile +'/'+ i
+			Destination= i
+			if os.path.isfile(Source): #является файлом, а не каталогом.
+				
+				CurAction="Получаем размер файла: " + Destination
+				print (CurAction + "...")
+				Size_Source = os.path.getsize(Source)
+				Size_Destination=0
+				try:
+					Size_Destination = Curftp.size(Destination)
+				except:
+					Size_Destination=0 #считаем, что нет файла
+				
+				if (Size_Source!=Size_Destination): #Если размер с исходным файлом не совпадает, то загружаем его на сервер
+					CurAction="Загружаем файл на сервер: " + Destination
+					print (CurAction + "...")
+					ftp_upload(Curftp, Source,Destination) #непосредственная загрузка на сервер
+					
+					try: #перепроверяем
+						Size_Destination = Curftp.size(Destination)
+						if (Size_Source!=Size_Destination): #
+							print("Размер после загрузки НЕ совпадает! ")
+							ErrorFile.append(i);
+						else:
+							ListFile.append(i);
+							if (DeleteOnSuccessfull==True): #если стоит флаг на удаление после успешной загрузки, то удаляем 
+								CurAction="Удаляем файл после успешной загрузки: " + Destination
+								print (CurAction + "...")
+								os.remove(Source)
+					except:
+						print("Не удалось проверить файл после его загрузки на сервер! ")
+						Size_Destination=0 #считаем, что нет файла
+						ErrorFile.append(i);
+					
+				else:
+					print("Размер совпадает!")
+					SkipFile.append(i);
+					if (DeleteOnSuccessfull==True): #если стоит флаг на удаление после успешной загрузки, то удаляем 
+							CurAction="Удаляем файл после успешной загрузки: " + Destination
+							print (CurAction + "...")
+							os.remove(Source)
+		except:
+			ErrorFile.append(i);
+	CurAction="Узнаем длины массивов"
+	print (CurAction + "...")
+	LFile=len(ListFile)
+	EFile=len(ErrorFile)
+	SFile=len(SkipFile)
+	
+	CurAction="Формируем письмо"
+	print (CurAction + "...")
+	MailText="Бэкап завершен.<br> Успешно загруженных файлов: "+str(LFile)+"<br> Пропущенных файлов: "+str(SFile)+"<br> Неуспешно загруженных файлов: "+str(EFile)+"<br>Список обработанных файлов:<blockquote>" 
+	A=0
+	for i in ListFile:
+		MailText+="<br> -" + ListFile[A]
+		A=A+1
+	
+	MailText+="</blockquote><br>Список пропущенных файлов:<blockquote>" 
+	A=0
+	for i in SkipFile:
+		MailText+="<br> -" + SkipFile[A]
+		A=A+1
+	
+	MailText+="</blockquote><br>Список неуспешно обработанных файлов:<blockquote>" 
+	A=0
+	for i in ErrorFile:
+		MailText+="<br> -" + ErrorFile[A]
+		A=A+1
+	MailText+="</blockquote>" 
+	CurAction="Отправляем письмо"
+	CurAPI_Email.send_email( "***@yandex.ru", "Бэкап ", MailText)    
+	
+	print ("Отключаемся...")
+	Curftp.quit()
+except:
+	MailText="Бэкап не удался. Последняя операция: " + CurAction
+	CurAPI_Email.send_email( "***@yandex.ru", "Бэкап", MailText)    
+	
+	print ("Отключаемся...")
+#input("Press Enter to continue...")
