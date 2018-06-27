@@ -32,7 +32,7 @@ def GetLogo():
 def StartHTML(Title):
 	Text = "<html><title>" + Title + """</title><meta http-equiv="Content-Type" content="text/html; charset=windows-1251"><meta http-equiv="Content-Language" content="ru">"""
 	return Text
-
+ 
 #Модуль отправки файла
 def send_email(Mail_To,Subject,EMailText,AttachFileName):
 	today = datetime.datetime.today() #текущая дата и время
